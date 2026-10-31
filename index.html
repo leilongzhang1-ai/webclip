@@ -90,7 +90,12 @@
   .msg:active{background:var(--chip)}
   .msg .txt{
     white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;
-    font-size:15px; line-height:1.6; max-height:15em; overflow:auto;
+    font-size:15px; line-height:1.6;
+  }
+  .msg .txt.clamped{
+    max-height:19em; overflow:hidden;
+    -webkit-mask-image:linear-gradient(180deg,#000 74%,rgba(0,0,0,.12) 100%);
+    mask-image:linear-gradient(180deg,#000 74%,rgba(0,0,0,.12) 100%);
   }
   .msg .meta{
     display:flex; align-items:center; gap:8px; margin-top:7px;
@@ -3041,6 +3046,18 @@ var qrcode = function() {
       frag.appendChild(card);
     });
     list.appendChild(frag);
+
+    // 太长的文字先折叠，给个「展开」，并在底部做淡出，避免看着像被截断
+    Array.prototype.forEach.call(list.querySelectorAll('.msg .txt'), function (body) {
+      body.classList.add('clamped');
+      if (body.scrollHeight > body.clientHeight + 4) {
+        var meta2 = body.parentNode.querySelector('.meta');
+        var btn = makeBtn('展开', 'expand');
+        meta2.insertBefore(btn, meta2.querySelector('button'));
+      } else {
+        body.classList.remove('clamped');
+      }
+    });
   }
 
   /* ---------------- 提示 ---------------- */
@@ -3145,13 +3162,30 @@ var qrcode = function() {
 
   /* ---------------- MQTT ---------------- */
 
+  var SLOTS = 12;   // 文字留存槽位：轮转发布，后打开的设备能补齐最近若干条
+
   var client = new MQTTLite.Client({
     url: BROKER,
     onState: function (s) { setConn(s); },
     onMessage: onMqttMessage
   });
 
-  function topic() { return TOPIC_PREFIX + room; }
+  function topicBase() { return TOPIC_PREFIX + room; }
+
+  function nextSlot() {
+    var n;
+    try { n = parseInt(localStorage.getItem('webclip.slot'), 10); } catch (e) { /* ignore */ }
+    if (!isFinite(n)) n = Math.floor(Math.random() * SLOTS);
+    n = (n + 1) % SLOTS;
+    try { localStorage.setItem('webclip.slot', String(n)); } catch (e) { /* ignore */ }
+    return n;
+  }
+
+  function topicFor(m) {
+    var base = topicBase();
+    if (m.img) return base;            // 图片只留最新一张，避免占用太多带宽
+    return base + '/t' + nextSlot();   // 文字轮转，晚打开也能补到最近的
+  }
 
   function setConn(s) {
     connState = s;
@@ -3186,7 +3220,7 @@ var qrcode = function() {
       toast('图片太大了，发送失败');
       return;
     }
-    var ok = client.publish(topic(), payload, true);
+    var ok = client.publish(topicFor(m), payload, true);
     if (ok) {
       m.state = 'sent';
     } else {
@@ -3221,7 +3255,8 @@ var qrcode = function() {
   }
 
   function onMqttMessage(t, payload, flags) {
-    if (t !== topic()) return;
+    var base = topicBase();
+    if (t !== base && t.indexOf(base + '/') !== 0) return;
     var data;
     try { data = JSON.parse(payload); } catch (e) { return; }
     if (!data) return;
@@ -3480,7 +3515,12 @@ var qrcode = function() {
         var act = btn.getAttribute('data-act');
         if (act === 'save') saveImage(m.img, m.ts);
         else if (act === 'copyimg') copyImage(m.img);
-        else copyText(m.t, '已复制到剪贴板');
+        else if (act === 'expand') {
+          var body = card.querySelector('.txt');
+          if (!body) return;
+          var open = body.classList.toggle('clamped');
+          btn.textContent = open ? '展开' : '收起';
+        } else copyText(m.t, '已复制到剪贴板');
         return;
       }
       if (m.img) openViewer(idx);
@@ -3522,7 +3562,15 @@ var qrcode = function() {
       pending = [];
       seen = Object.create(null);
       try { localStorage.removeItem(histKey); } catch (e) { /* ignore */ }
-      client.publish(topic(), JSON.stringify({ v: 1, id: newId(), t: '', ts: Date.now() }), true);
+      // 空内容 + retain 就是让服务器删掉这条留存。分两轮发，避免瞬间一批被吞掉
+      var targets = [topicBase()];
+      for (var i = 0; i < SLOTS; i++) targets.push(topicBase() + '/t' + i);
+      targets.forEach(function (tp, i) {
+        setTimeout(function () { client.publish(tp, '', true); }, i * 30);
+      });
+      setTimeout(function () {
+        targets.forEach(function (tp) { client.publish(tp, '', true); });
+      }, 1500);
       render();
       closeModal();
       toast('已清空');
@@ -3547,7 +3595,8 @@ var qrcode = function() {
     updateSendEnabled();
     bind();
     client.connect();
-    client.subscribe(topic());
+    client.subscribe(topicBase());
+    client.subscribe(topicBase() + '/+');
     var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
     if (!coarse) $('input').focus();
   }
