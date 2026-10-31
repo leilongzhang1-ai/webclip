@@ -1,30 +1,40 @@
 # 跨设备剪贴板
 
-不登录、不装 App，手机和电脑之间互传文字。打开同一个网址就能用，内容通过公共 MQTT 服务器中转，不做长期存储。
+不登录、不装 App，手机和电脑之间互传**文字和图片**。打开同一个网址就能用，内容通过公共 MQTT 服务器中转，不做长期存储。
 
 ## 怎么用
 
 1. 电脑上打开：<https://leilongzhang1-ai.github.io/webclip/>
 2. 页面右上角点二维码图标，用手机扫一下（或把网址发到手机）。
-3. 任意一边粘贴文字 → 发送，另一边几乎立刻出现。
-4. 点卡片即可复制；手机建议「添加到主屏幕」，下次一点就开。
+3. 任意一边粘贴文字或图片 → 发送，另一边几乎立刻出现。
+4. 点文字卡片即复制；图片卡片可「复制」或「保存」，点图看大图。
+
+## 关于图片
+
+- 三种发送方式：点输入框右侧的图片按钮选图、直接 **Ctrl+V 粘贴**、把图片**拖进页面**。
+- 大图自动压缩：长边压到 1400px 以内、转成 WebP，通常落到 200–400KB，文字依然清晰。
+- 小截图（≤420KB 的 PNG/GIF/WebP）**原样发送**，不重编码、不丢动图帧。
+- 因为走的是 MQTT，单张压缩后限制在 600KB 以内（超出会继续压）。**不支持大文件**。
 
 ## 说明
 
 - 网址里的 `#r=xxxxxx` 是房间号，两台设备要一致。直接打开首页会自动生成一个并记住。
 - 最后一条内容会留在服务器上（保留消息），所以对方晚点打开也能看到；「清空记录」可删掉。
-- 本机历史存在浏览器的 localStorage 里，只在自己设备上。
+- 本机历史存在浏览器的 localStorage 里，图片最多占约 2MB，超了就只保留文字。
 - 不加密，房间号被猜到就能看到内容，**不要传敏感信息**。
 - 依赖公共服务器 `broker.emqx.io`，它不可用时页面会显示「连接断开，正在重试」。
 
 ## 开发
 
 ```bash
-node build.mjs          # 生成 dist/index.html（单文件，零外部依赖）
-node test/mqtt-test.mjs # 公共 MQTT 服务器连通性测试
-node test/qr-test.mjs   # 二维码生成 + 解码验证
-node test/server.mjs    # 本地预览 http://127.0.0.1:8787
-node test/e2e.mjs       # 真实浏览器端到端测试（需先启动 server）
+node build.mjs            # 生成 dist/index.html（单文件，零外部依赖）
+node test/mqtt-test.mjs   # 公共 MQTT 服务器连通性测试
+node test/mqtt-size.mjs   # 单条消息最大体积探测
+node test/qr-test.mjs     # 二维码生成 + 解码验证
+node test/make-image.mjs  # 生成测试用大图/小图
+node test/server.mjs      # 本地预览 http://127.0.0.1:8787
+node test/e2e.mjs         # 文字链路端到端测试（需先启动 server）
+node test/e2e-image.mjs   # 图片链路端到端测试（需先启动 server）
 ```
 
 源码在 `src/`：`mqtt-lite.js`（手写的 MQTT 3.1.1 客户端，约 300 行）、`app.js`（页面逻辑）、
